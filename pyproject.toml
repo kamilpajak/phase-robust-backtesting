@@ -1,0 +1,46 @@
+[project]
+name = "phase-robust-backtesting"
+version = "0.1.0"
+description = "Pre-registration ledger + multi-phase audit + Bonferroni thresholds for retail-quant strategy validation"
+readme = "README.md"
+requires-python = ">=3.13"
+license = {text = "MIT"}
+authors = [{name = "Kamil Pajak"}]
+keywords = ["backtesting", "quant", "pre-registration", "multiple-testing", "bonferroni", "phase-aliasing"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Financial and Insurance Industry",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Office/Business :: Financial :: Investment",
+    "Topic :: Scientific/Engineering",
+]
+dependencies = [
+    "scipy>=1.17.1",
+    "statsmodels>=0.14.6",
+]
+
+[project.urls]
+Homepage = "https://github.com/kamilpajak/phase-robust-backtesting"
+"Bug Tracker" = "https://github.com/kamilpajak/phase-robust-backtesting/issues"
+"Anti-pattern catalog" = "https://github.com/kamilpajak/phase-robust-backtesting/blob/main/docs/anti_patterns.md"
+
+[project.scripts]
+phase-robust-audit = "phase_robust_backtesting.audit_multi_phase:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["phase_robust_backtesting*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E501"]
