@@ -104,7 +104,9 @@ def _run_one_phase(
     Passes a per-phase --out under /tmp so subprocess invocations cannot
     clobber the canonical research docs (the experiment scripts' default
     --out paths point to docs/research/, which would overwrite historical
-    sweeps with single-phase audit data).
+    sweeps with single-phase audit data). The /tmp file is unlinked
+    after parsing — only the parsed rows from stderr are needed; the
+    Markdown report is a transient artifact of the subprocess invocation.
     """
     out_path = Path(f"/tmp/audit_multi_phase_{script.stem}_p{phase_offset}.md")
     cmd = [
@@ -120,11 +122,17 @@ def _run_one_phase(
     ]
     proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
     if proc.returncode != 0:
+        # Leave the /tmp report on disk for failure forensics; the
+        # operator can grep it for diagnostic context.
         raise RuntimeError(
             f"phase {phase_offset} run failed (exit {proc.returncode}):\n"
             f"stderr tail:\n{proc.stderr[-2000:]}"
         )
-    return _parse_results(proc.stderr, phase_offset)
+    rows = _parse_results(proc.stderr, phase_offset)
+    # Successful phase: drop the transient Markdown report so multi-day
+    # sweeps don't leave dozens of files in /tmp.
+    out_path.unlink(missing_ok=True)
+    return rows
 
 
 def run_audit(
