@@ -127,40 +127,56 @@ def _run_one_phase(
     return _parse_results(proc.stderr, phase_offset)
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument(
-        "--script",
-        type=Path,
-        required=True,
-        help="Path to the experiment script that accepts --phase-offset.",
-    )
-    ap.add_argument(
-        "--rebalance-stride",
-        type=int,
-        default=5,
-        help="Stride to sweep across (default 5 = weekly cadence).",
-    )
-    ap.add_argument(
-        "--out",
-        type=Path,
-        default=Path("multi_phase_audit.json"),
-    )
-    args, forwarded = ap.parse_known_args()
-    if not args.script.exists():
-        raise SystemExit(f"--script path does not exist: {args.script}")
+def run_audit(
+    script: Path,
+    forwarded_args: list[str],
+    *,
+    rebalance_stride: int = 5,
+    out: Path | None = None,
+) -> int:
+    """Run a multi-phase audit programmatically.
 
-    script = args.script.resolve()
+    Importable entry point — host applications can call this directly
+    instead of spawning a subprocess to invoke the CLI. Avoids
+    double-fork (e.g. an AlphaLens wrapper script that itself uses
+    subprocess.run to run this module would swallow tracebacks and
+    break Ctrl+C signal propagation).
+
+    Parameters
+    ----------
+    script : Path
+        Path to the experiment script that accepts ``--phase-offset N``.
+    forwarded_args : list[str]
+        Arguments to pass through to the experiment script verbatim
+        (e.g. ``--is-start 2019-01-08 --cost-half-spreads 5``).
+    rebalance_stride : int
+        Number of phases to sweep (default 5 = weekly cadence with
+        daily phase offset).
+    out : Path | None
+        Output path for the aggregated JSON report. Defaults to
+        ``multi_phase_audit.json`` in the current working directory.
+
+    Returns
+    -------
+    int
+        Exit code: 0 on success. Raises :class:`RuntimeError` on
+        per-phase failure (preserving the offending stderr tail).
+    """
+    if not script.exists():
+        raise SystemExit(f"script path does not exist: {script}")
+    script = script.resolve()
+    if out is None:
+        out = Path("multi_phase_audit.json")
 
     print(f"\n>>> Multi-phase audit: {script.name}", flush=True)
     print(f"    script: {script}", flush=True)
-    print(f"    stride: {args.rebalance_stride}", flush=True)
-    print(f"    phases: 0..{args.rebalance_stride - 1}", flush=True)
+    print(f"    stride: {rebalance_stride}", flush=True)
+    print(f"    phases: 0..{rebalance_stride - 1}", flush=True)
 
     all_rows: list[list[dict]] = []
-    for phase in range(args.rebalance_stride):
-        print(f"\n>>> phase {phase}/{args.rebalance_stride - 1}", flush=True)
-        rows = _run_one_phase(script, forwarded, phase, args.rebalance_stride)
+    for phase in range(rebalance_stride):
+        print(f"\n>>> phase {phase}/{rebalance_stride - 1}", flush=True)
+        rows = _run_one_phase(script, forwarded_args, phase, rebalance_stride)
         if not rows:
             print(f"    WARNING: no result rows parsed for phase {phase}", flush=True)
         for r in rows:
@@ -171,7 +187,7 @@ def main() -> int:
 
     output: dict = {
         "script": str(script),
-        "rebalance_stride": args.rebalance_stride,
+        "rebalance_stride": rebalance_stride,
         "configs": [],
     }
     for config_key, phase_rows in by_config.items():
@@ -197,9 +213,9 @@ def main() -> int:
             }
         )
 
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(json.dumps(output, indent=2))
-    print(f"\n>>> wrote {args.out}", flush=True)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(output, indent=2))
+    print(f"\n>>> wrote {out}", flush=True)
 
     print("\n>>> Verdict summary")
     for entry in output["configs"]:
@@ -218,6 +234,34 @@ def main() -> int:
         else:
             print(f"  {cfg}\n    verdict: {v} | (incomplete summary)")
     return 0
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    ap.add_argument(
+        "--script",
+        type=Path,
+        required=True,
+        help="Path to the experiment script that accepts --phase-offset.",
+    )
+    ap.add_argument(
+        "--rebalance-stride",
+        type=int,
+        default=5,
+        help="Stride to sweep across (default 5 = weekly cadence).",
+    )
+    ap.add_argument(
+        "--out",
+        type=Path,
+        default=Path("multi_phase_audit.json"),
+    )
+    args, forwarded = ap.parse_known_args()
+    return run_audit(
+        args.script,
+        forwarded,
+        rebalance_stride=args.rebalance_stride,
+        out=args.out,
+    )
 
 
 if __name__ == "__main__":
