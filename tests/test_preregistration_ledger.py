@@ -322,5 +322,177 @@ class TestBonferroniThreshold(unittest.TestCase):
         self.assertGreater(t_with_two, t_with_one)
 
 
+class TestRegistrationExtras(unittest.TestCase):
+    """v0.2.2: `Registration.extras` accepts arbitrary top-level JSON keys
+    that aren't declared dataclass fields. Forward-compat hook for downstream
+    research projects (e.g. AlphaLens) to carry phase-A pre-screen results,
+    pod compute logs, or postmortem links without requiring a PRB release."""
+
+    def test_from_dict_routes_unknown_keys_to_extras(self):
+        from phase_robust_backtesting.ledger import Registration
+
+        payload = _make_reg_kwargs()
+        payload["registered_at"] = "2026-04-29"
+        payload["phase_a_result"] = {"verdict": "pass", "executed_at": "2026-04-30"}
+        payload["pod_compute"] = "$0.33 on cpu3g-8-32"
+
+        reg = Registration.from_dict(payload)
+
+        self.assertEqual(reg.signal_class, "fundamental_quality_x_momentum")
+        self.assertEqual(reg.extras["phase_a_result"]["verdict"], "pass")
+        self.assertEqual(reg.extras["pod_compute"], "$0.33 on cpu3g-8-32")
+
+    def test_to_dict_flattens_extras_to_top_level(self):
+        """JSON shape stability: a consumer ignorant of `extras` sees the
+        unknown keys at top level, identical to the input shape. Prevents
+        gratuitous git diffs on ledger.json after a no-op round-trip."""
+        from phase_robust_backtesting.ledger import Registration
+
+        reg = Registration(**_make_reg_kwargs(extras={"phase_a_result": {"v": 1}}))
+
+        payload = reg.to_dict()
+
+        self.assertIn("phase_a_result", payload)
+        self.assertEqual(payload["phase_a_result"], {"v": 1})
+        # `extras` key MUST NOT appear at top level — it's an in-memory bucket only.
+        self.assertNotIn("extras", payload)
+
+    def test_round_trip_preserves_extras(self):
+        from phase_robust_backtesting.ledger import Registration
+
+        payload = _make_reg_kwargs()
+        payload["registered_at"] = "2026-04-29"
+        payload["phase_a_result"] = {"verdict": "pass", "gates": ["A0", "A1", "A2"]}
+
+        restored = Registration.from_dict(Registration.from_dict(payload).to_dict())
+
+        self.assertEqual(restored.extras["phase_a_result"], payload["phase_a_result"])
+
+    def test_declared_field_wins_on_collision(self):
+        """Defensive: if a caller manually mutates `reg.extras["signal_class"]`
+        the dataclass attribute still dictates the serialised output."""
+        from phase_robust_backtesting.ledger import Registration
+
+        reg = Registration(**_make_reg_kwargs())
+        reg.extras["signal_class"] = "BOGUS"
+
+        payload = reg.to_dict()
+
+        self.assertEqual(payload["signal_class"], "fundamental_quality_x_momentum")
+
+    def test_ledger_load_tolerates_unknown_top_level_keys(self):
+        """Reload of a ledger.json containing entries with extras (e.g.
+        AlphaLens's `phase_a_result`) must succeed — pre-v0.2.2 the load
+        path raised TypeError on unknown kwargs."""
+        from phase_robust_backtesting.ledger import Ledger
+
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            path = Path(tmp.name) / "ledger.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "entries": [
+                            {
+                                **_make_reg_kwargs(),
+                                "registered_at": "2026-04-29",
+                                "phase_a_result": {"verdict": "pass"},
+                                "pod_compute": "$0.42",
+                            }
+                        ]
+                    }
+                )
+            )
+            ledger = Ledger(Path(tmp.name))
+            reg = ledger.get("tri_factor_2026_04_29")
+            self.assertEqual(reg.extras["phase_a_result"], {"verdict": "pass"})
+            self.assertEqual(reg.extras["pod_compute"], "$0.42")
+        finally:
+            tmp.cleanup()
+
+
+class TestLedgerCompleteOutcomeExtras(unittest.TestCase):
+    """v0.2.2: `Ledger.complete(outcome_extras=...)` merges arbitrary keys
+    into the `outcome` dict alongside the canonical metrics, so paradigm
+    orchestrators can attach forensic links (`audit_orchestrator_log`,
+    `pod_compute`, `windows_evaluated`, etc.) without bypassing the API.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_complete_with_outcome_extras_merges_into_outcome(self):
+        from phase_robust_backtesting.ledger import Ledger, Registration
+
+        ledger = Ledger(self.root)
+        ledger.add(Registration(**_make_reg_kwargs()))
+        ledger.complete(
+            "tri_factor_2026_04_29",
+            verdict="FAIL",
+            mean_alpha_t=0.34,
+            mean_excess_net=-0.085,
+            audit_path="docs/research/audit.json",
+            completed_at=date(2026, 4, 29),
+            outcome_extras={
+                "pod_compute": "$0.33 on cpu3g-8-32",
+                "windows_evaluated": ["IS", "OOS", "FL"],
+            },
+        )
+
+        reg = ledger.get("tri_factor_2026_04_29")
+        self.assertEqual(reg.outcome["verdict"], "FAIL")
+        self.assertEqual(reg.outcome["pod_compute"], "$0.33 on cpu3g-8-32")
+        self.assertEqual(reg.outcome["windows_evaluated"], ["IS", "OOS", "FL"])
+
+    def test_outcome_extras_cannot_overwrite_canonical_metric_keys(self):
+        """Guard against contract-violation: callers must not stuff a
+        differently-named-but-same-semantics metric into outcome via extras
+        (e.g. `mean_excess_net_ann` aliasing `mean_excess_net`). The canonical
+        kwargs win on collision."""
+        from phase_robust_backtesting.ledger import Ledger, Registration
+
+        ledger = Ledger(self.root)
+        ledger.add(Registration(**_make_reg_kwargs()))
+        ledger.complete(
+            "tri_factor_2026_04_29",
+            verdict="FAIL",
+            mean_alpha_t=0.34,
+            mean_excess_net=-0.085,
+            audit_path="docs/research/audit.json",
+            completed_at=date(2026, 4, 29),
+            outcome_extras={"mean_alpha_t": 99.0, "extra_key": "value"},
+        )
+
+        reg = ledger.get("tri_factor_2026_04_29")
+        # Canonical mean_alpha_t (0.34) wins, not the extras-injected 99.0.
+        self.assertAlmostEqual(reg.outcome["mean_alpha_t"], 0.34)
+        self.assertEqual(reg.outcome["extra_key"], "value")
+
+    def test_complete_without_outcome_extras_is_backwards_compat(self):
+        """v0.2.1 callers (no outcome_extras kwarg) must continue to work."""
+        from phase_robust_backtesting.ledger import Ledger, Registration
+
+        ledger = Ledger(self.root)
+        ledger.add(Registration(**_make_reg_kwargs()))
+        ledger.complete(
+            "tri_factor_2026_04_29",
+            verdict="PASS",
+            mean_alpha_t=3.5,
+            mean_excess_net=0.05,
+            audit_path="x.json",
+            completed_at=date(2026, 4, 29),
+        )
+
+        reg = ledger.get("tri_factor_2026_04_29")
+        self.assertEqual(
+            sorted(reg.outcome),
+            ["audit_path", "completed_at", "mean_alpha_t", "mean_excess_net", "notes", "verdict"],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

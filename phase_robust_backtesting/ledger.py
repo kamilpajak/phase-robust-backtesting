@@ -18,7 +18,7 @@ number already on record (Bonferroni at n=count, floored at n=1).
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -38,6 +38,14 @@ class Registration:
     All fields except ``status`` and ``outcome`` are frozen at registration
     time and must not be edited afterwards (re-running with different
     params requires a new id).
+
+    ``extras`` (v0.2.2) carries arbitrary top-level JSON keys that aren't
+    declared dataclass fields — a forward-compat hook so downstream research
+    projects (e.g. AlphaLens phase-A pre-screen results, pod compute logs,
+    postmortem links) can attach structured forensic data through the ledger
+    without bumping PRB. ``from_dict()`` auto-routes unknown keys into
+    ``extras``; ``to_dict()`` flattens them back to top level so the on-disk
+    JSON shape stays identical to pre-v0.2.2 entries.
     """
 
     id: str
@@ -51,6 +59,7 @@ class Registration:
     status: str = "registered"
     outcome: dict[str, Any] | None = None
     notes: str = ""
+    extras: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.id:
@@ -64,14 +73,26 @@ class Registration:
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
+        extras = payload.pop("extras", {}) or {}
         payload["registered_at"] = self.registered_at.isoformat()
-        return payload
+        # Order is intentional: extras first, declared fields second. A
+        # caller mutating ``reg.extras["signal_class"]`` at runtime cannot
+        # poison the serialised output — declared keys always overwrite.
+        return {**extras, **payload}
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> Registration:
         data = dict(payload)
         data["registered_at"] = date.fromisoformat(data["registered_at"])
-        return cls(**data)
+        declared = {f.name for f in fields(cls)}
+        known = {k: v for k, v in data.items() if k in declared}
+        # Merge any explicit "extras" key (callers may already have routed
+        # the dict) with residual top-level keys not in the dataclass schema.
+        explicit_extras = known.pop("extras", {}) or {}
+        residual = {k: v for k, v in data.items() if k not in declared}
+        if residual or explicit_extras:
+            known["extras"] = {**explicit_extras, **residual}
+        return cls(**known)
 
 
 @dataclass
@@ -161,7 +182,17 @@ class Ledger:
         audit_path: str,
         completed_at: date,
         notes: str = "",
+        outcome_extras: dict[str, Any] | None = None,
     ) -> None:
+        """Mark a registration as completed and record its outcome.
+
+        ``outcome_extras`` (v0.2.2) merges arbitrary keys into the outcome
+        dict alongside the canonical metrics. Use it for paradigm-specific
+        forensic data (e.g. ``windows_evaluated``, ``pod_compute``,
+        ``audit_orchestrator_log``). Canonical kwargs always win on key
+        collision — extras cannot rewrite ``verdict`` / ``mean_alpha_t``
+        / ``mean_excess_net`` / ``audit_path`` / ``completed_at`` / ``notes``.
+        """
         if verdict not in VALID_VERDICTS:
             raise ValueError(f"verdict must be one of {sorted(VALID_VERDICTS)}, got {verdict!r}")
         reg = self.get(id)
@@ -171,7 +202,7 @@ class Ledger:
                 "different params requires a new pre-registration id."
             )
         reg.status = "completed"
-        reg.outcome = {
+        canonical = {
             "verdict": verdict,
             "mean_alpha_t": mean_alpha_t,
             "mean_excess_net": mean_excess_net,
@@ -179,6 +210,8 @@ class Ledger:
             "completed_at": completed_at.isoformat(),
             "notes": notes,
         }
+        # extras first, canonical second — canonical wins on collision.
+        reg.outcome = {**(outcome_extras or {}), **canonical}
         self._save()
 
     def abandon(self, id: str, reason: str) -> None:
