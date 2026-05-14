@@ -1,6 +1,6 @@
 [project]
 name = "phase-robust-backtesting"
-version = "0.2.2"
+version = "0.2.3"
 description = "Pre-registration ledger + multi-phase audit + Bonferroni thresholds for retail-quant strategy validation"
 readme = "README.md"
 requires-python = ">=3.13"

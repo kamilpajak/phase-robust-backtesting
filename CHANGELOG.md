@@ -2,6 +2,24 @@
 
 All notable changes to `phase-robust-backtesting` are documented here. Versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.2.3] — 2026-05-14
+
+### Fixed
+
+- **G4 cost-stress no-op bug** — `audit_multi_phase._RESULT_LINE` regex now captures the optional `α-net 4F=...% t-net=...` trailing block emitted by experiment scripts since 2026-05-13. Pre-fix, the regex captured only the gross/pre-cost `t` group, and any downstream G4 cost-stress gate computed from `summarise_phase_results(...)["alpha_t"]` was a structural no-op duplicate of G1 (gross t-stat is cost-invariant by construction — `α_gross − drag_ann` only shifts `α`, not the t-stat). Material finding from AlphaLens paradigm-13 ev_fcff_yield postmortem (2026-05-13).
+- **`_parse_results`** now extracts `alpha_t_net` and `alpha_net_ann` fields, with `has_net_regression: bool` flag indicating whether the values come from the genuine net-regression tokens or fall back to gross (for legacy logs).
+- **`_AGGREGATED_KEYS`** in `multi_phase.summarise_phase_results` includes `alpha_t_net` so downstream consumers can compute mean/std/min/max of the net t-stat across phases.
+- **`per_phase` output block** in audit_multi_phase JSON output now includes `alpha_t_net`, `alpha_net_ann`, and `has_net_regression`.
+
+### Compatibility
+
+Additive. Legacy experiment scripts emitting only `α 4F=...% t=...` (no `α-net 4F=...% t-net=...` trailing block) continue to parse — `alpha_t_net` falls back to `alpha_t` and `has_net_regression=False`. The pre-fix G4-as-no-op behaviour persists for those rows (consumers can detect and warn via the flag). Experiment scripts that want a genuine G4 cost-stress gate must emit the `α-net 4F=...% t-net=...` tokens.
+
+### Tests added
+
+- `tests/test_audit_multi_phase.py::NetRegressionParsingTests` — 4 tests covering present-tokens extraction, legacy fallback, NaN tolerance, infinity tolerance.
+- `tests/test_multi_phase_aggregator.py::test_alpha_t_net_is_aggregated_for_g4_cost_stress` — verifies aggregator reports net independently of gross.
+
 ## [0.2.2] — 2026-05-13
 
 ### Added
