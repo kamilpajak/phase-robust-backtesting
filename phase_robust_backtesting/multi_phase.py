@@ -29,6 +29,13 @@ _AGGREGATED_KEYS: tuple[str, ...] = (
     "excess_gross_ann",
     "excess_net_ann",
     "alpha_t",
+    # v0.2.3: net-of-cost regression t-stat. When the experiment script emits
+    # `α-net 4F=...% t-net=...` tokens, `alpha_t_net` is the net t-stat and
+    # downstream consumers can compute G4 cost-stress gates that are NOT a
+    # no-op duplicate of G1. For legacy scripts without these tokens,
+    # `alpha_t_net` falls back to `alpha_t` (cost-invariant) per
+    # `_parse_results` graceful-degradation contract.
+    "alpha_t_net",
 )
 
 

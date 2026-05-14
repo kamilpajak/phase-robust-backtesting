@@ -21,6 +21,14 @@ class _StubResult:
     excess_gross_ann: float
     excess_net_ann: float
     alpha_t: float
+    # v0.2.3: alpha_t_net is the net-of-cost regression t-stat. Defaults
+    # to alpha_t (gross) for backwards-compatible stub construction; tests
+    # that exercise net regression set it explicitly.
+    alpha_t_net: float | None = None
+
+    def __post_init__(self):
+        if self.alpha_t_net is None:
+            self.alpha_t_net = self.alpha_t
 
 
 class MultiPhaseAggregatorTests(unittest.TestCase):
@@ -78,6 +86,36 @@ class MultiPhaseAggregatorTests(unittest.TestCase):
             {"alpha_t": -0.4, "excess_net_ann": -0.08},
         ]
         self.assertEqual(robust_verdict(negative), "FAIL")
+
+    def test_alpha_t_net_is_aggregated_for_g4_cost_stress(self):
+        """v0.2.3: ``alpha_t_net`` is the net-of-cost regression t-stat
+        aggregated independently of gross ``alpha_t``. Downstream consumers
+        compute G4 cost-stress gates from the net mean — pre-fix
+        ``_AGGREGATED_KEYS`` only included gross ``alpha_t`` (cost-invariant
+        by construction), making G4 a structural no-op duplicate of G1
+        (paradigm-13 ev_fcff_yield material finding 2026-05-13)."""
+        from phase_robust_backtesting.multi_phase import summarise_phase_results
+
+        # Gross t-stats stable at ~2.7 across phases; net t-stats degraded
+        # to ~1.6 by cost drag. The aggregator must report both means
+        # independently so a downstream G4 gate can compare net to its
+        # threshold without conflating with gross.
+        results = [
+            {"sharpe_gross": 1.4, "sharpe_net": 1.0, "excess_gross_ann": 0.04,
+             "excess_net_ann": 0.02, "alpha_t": 2.7, "alpha_t_net": 1.6},
+            {"sharpe_gross": 1.5, "sharpe_net": 1.1, "excess_gross_ann": 0.05,
+             "excess_net_ann": 0.03, "alpha_t": 2.8, "alpha_t_net": 1.7},
+            {"sharpe_gross": 1.3, "sharpe_net": 0.9, "excess_gross_ann": 0.04,
+             "excess_net_ann": 0.02, "alpha_t": 2.6, "alpha_t_net": 1.5},
+        ]
+        summary = summarise_phase_results(results)
+        self.assertIn("alpha_t", summary)
+        self.assertIn("alpha_t_net", summary)
+        self.assertAlmostEqual(summary["alpha_t"]["mean"], 2.7, places=2)
+        self.assertAlmostEqual(summary["alpha_t_net"]["mean"], 1.6, places=2)
+        # The whole point: net mean is materially below gross mean.
+        self.assertLess(summary["alpha_t_net"]["mean"], summary["alpha_t"]["mean"])
+        self.assertEqual(summary["alpha_t_net"]["n"], 3)
 
     def test_filters_phases_consistently_when_one_metric_is_nan(self):
         """When a phase has a valid alpha_t but NaN excess_net_ann (or vice

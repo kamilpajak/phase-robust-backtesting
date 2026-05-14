@@ -39,10 +39,25 @@ from phase_robust_backtesting.multi_phase import robust_verdict, summarise_phase
 # and:
 #   "IS 2015-2022 | vw=1.0 ADV≥$5M cost=5bps | ... Sh gross=0.42 net=0.21 |
 #    excess gross=18.7% net=16.1% | α 4F=27.8% t=1.37"
+#
+# Optional `α-net 4F=...% t-net=...` trailing block captures the net-of-cost
+# regression coefficients (paradigm-13 ev_fcff_yield material finding 2026-05-13:
+# without these tokens, G4 cost-stress gates computed downstream are a structural
+# no-op duplicate of G1 because the pre-existing `t` group is the gross/pre-cost
+# regression t-stat — cost-invariant by construction). Experiment scripts that
+# want a meaningful cost-stress gate MUST emit the trailing `α-net 4F=...% t-net=...`
+# tokens; legacy scripts without those tokens degrade gracefully (alpha_t_net
+# falls back to alpha_t and downstream consumers can detect via the
+# `has_net_regression` flag in `_parse_results`).
+#
+# `nan|inf` literals are accepted on both `t` and `t-net` groups so degenerate
+# Carhart regressions (zero residual variance, singular design) survive the
+# regex without silently dropping the line from aggregation.
 _RESULT_LINE = re.compile(
     r"Sh gross=(?P<sg>[-\d.]+) net=(?P<sn>[-\d.]+) \| "
     r"excess gross=(?P<eg>[-\d.]+)% net=(?P<en>[-\d.]+)% \| "
-    r"α 4F=(?P<a>[-\d.]+)% t=(?P<t>[-\d.]+)"
+    r"α 4F=(?P<a>[-\d.]+)% t=(?P<t>[-\d.]+|nan|inf)"
+    r"(?: \| α-net 4F=(?P<an>[-\d.]+)% t-net=(?P<tn>[-\d.]+|nan|inf))?"
 )
 
 # Log lines come prefixed with `<timestamp> INFO <name>: <content>`. Strip the
@@ -61,6 +76,14 @@ def _parse_results(stderr_text: str, phase_offset: int) -> list[dict[str, float]
         m = _RESULT_LINE.search(line)
         if not m:
             continue
+        # `alpha_t_net` is captured from the optional `α-net 4F=...% t-net=...`
+        # trailing block. Falls back to `alpha_t` (gross) when the block is
+        # absent so legacy logs from pre-2026-05-13 experiment scripts still
+        # aggregate cleanly — downstream G4 cost-stress gates degrade to the
+        # pre-fix no-op behaviour for those legacy rows, but at least the
+        # phase doesn't silently drop from the aggregate.
+        tn_raw = m.group("tn")
+        an_raw = m.group("an")
         rows.append(
             {
                 "sharpe_gross": float(m.group("sg")),
@@ -68,6 +91,14 @@ def _parse_results(stderr_text: str, phase_offset: int) -> list[dict[str, float]
                 "excess_gross_ann": float(m.group("eg")) / 100.0,
                 "excess_net_ann": float(m.group("en")) / 100.0,
                 "alpha_t": float(m.group("t")),
+                "alpha_ann": float(m.group("a")) / 100.0,
+                "alpha_t_net": float(tn_raw) if tn_raw is not None else float(m.group("t")),
+                "alpha_net_ann": (
+                    float(an_raw) / 100.0
+                    if an_raw is not None
+                    else float(m.group("a")) / 100.0
+                ),
+                "has_net_regression": tn_raw is not None,
                 "phase_offset": phase_offset,
                 "raw_line": line.strip(),
             }
@@ -215,6 +246,13 @@ def run_audit(
                         "excess_gross_ann": r["excess_gross_ann"],
                         "excess_net_ann": r["excess_net_ann"],
                         "alpha_t": r["alpha_t"],
+                        # v0.2.3: net-of-cost regression fields. Always present
+                        # in row dicts (with gross fallback for legacy logs);
+                        # the `has_net_regression` flag tells downstream
+                        # consumers whether the alpha_t_net is genuine or fallback.
+                        "alpha_t_net": r.get("alpha_t_net", r["alpha_t"]),
+                        "alpha_net_ann": r.get("alpha_net_ann"),
+                        "has_net_regression": r.get("has_net_regression", False),
                     }
                     for r in phase_rows
                 ],
