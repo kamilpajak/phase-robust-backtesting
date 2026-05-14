@@ -94,9 +94,7 @@ def _parse_results(stderr_text: str, phase_offset: int) -> list[dict[str, float]
                 "alpha_ann": float(m.group("a")) / 100.0,
                 "alpha_t_net": float(tn_raw) if tn_raw is not None else float(m.group("t")),
                 "alpha_net_ann": (
-                    float(an_raw) / 100.0
-                    if an_raw is not None
-                    else float(m.group("a")) / 100.0
+                    float(an_raw) / 100.0 if an_raw is not None else float(m.group("a")) / 100.0
                 ),
                 "has_net_regression": tn_raw is not None,
                 "phase_offset": phase_offset,

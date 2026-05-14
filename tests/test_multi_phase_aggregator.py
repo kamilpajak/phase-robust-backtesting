@@ -101,12 +101,30 @@ class MultiPhaseAggregatorTests(unittest.TestCase):
         # independently so a downstream G4 gate can compare net to its
         # threshold without conflating with gross.
         results = [
-            {"sharpe_gross": 1.4, "sharpe_net": 1.0, "excess_gross_ann": 0.04,
-             "excess_net_ann": 0.02, "alpha_t": 2.7, "alpha_t_net": 1.6},
-            {"sharpe_gross": 1.5, "sharpe_net": 1.1, "excess_gross_ann": 0.05,
-             "excess_net_ann": 0.03, "alpha_t": 2.8, "alpha_t_net": 1.7},
-            {"sharpe_gross": 1.3, "sharpe_net": 0.9, "excess_gross_ann": 0.04,
-             "excess_net_ann": 0.02, "alpha_t": 2.6, "alpha_t_net": 1.5},
+            {
+                "sharpe_gross": 1.4,
+                "sharpe_net": 1.0,
+                "excess_gross_ann": 0.04,
+                "excess_net_ann": 0.02,
+                "alpha_t": 2.7,
+                "alpha_t_net": 1.6,
+            },
+            {
+                "sharpe_gross": 1.5,
+                "sharpe_net": 1.1,
+                "excess_gross_ann": 0.05,
+                "excess_net_ann": 0.03,
+                "alpha_t": 2.8,
+                "alpha_t_net": 1.7,
+            },
+            {
+                "sharpe_gross": 1.3,
+                "sharpe_net": 0.9,
+                "excess_gross_ann": 0.04,
+                "excess_net_ann": 0.02,
+                "alpha_t": 2.6,
+                "alpha_t_net": 1.5,
+            },
         ]
         summary = summarise_phase_results(results)
         self.assertIn("alpha_t", summary)
