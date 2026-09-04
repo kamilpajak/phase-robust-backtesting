@@ -2,6 +2,23 @@
 
 All notable changes to `phase-robust-backtesting` are documented here. Versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] — 2026-09-04
+
+### Changed (breaking)
+
+- **`audit_multi_phase.run_audit` decouples the phase sweep from the rebalance cadence.** New keyword `n_phases: int = 5` drives the `range(n_phases)` phase loop; `rebalance_stride` now ONLY sets the trading-day cadence forwarded to the experiment script as `--rebalance-stride`. Pre-0.3.0, one conflated parameter drove both — `rebalance_stride=63` (quarterly) silently meant a 63-phase sweep, which is why downstream paradigms wrote bespoke ~500-line orchestrators just to pin the phase count (AlphaLens paradigms #12/#13). Callers that passed `rebalance_stride=N` expecting `N` phases must now pass `n_phases=N` explicitly.
+- **Validation:** `run_audit` raises `ValueError` when `n_phases > rebalance_stride` (a phase offset >= the stride aliases `offset % stride`, so the sweep would re-run identical calendars and overstate robustness) or when `n_phases < 1`.
+
+### Added
+
+- CLI flag `--n-phases` (default 5) on `python -m phase_robust_backtesting.audit_multi_phase`.
+- JSON report envelope carries top-level `n_phases` beside the existing `rebalance_stride` (additive; the per-config `n_phases` — the count of phases with parsed rows — is unchanged).
+
+### Tests added
+
+- `tests/test_audit_multi_phase.py::TestRunAuditPhaseSweep` — independent sweep/cadence, 5-phase default, `n_phases > stride` rejection (subprocess layer stubbed).
+- `tests/test_cli_smoke.py` — `--n-phases` present in `--help`.
+
 ## [0.2.3] — 2026-05-14
 
 ### Fixed

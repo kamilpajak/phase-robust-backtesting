@@ -9,12 +9,19 @@ fixtures (no real subprocess invocation needed).
 
 from __future__ import annotations
 
+import contextlib
+import io
+import json
+import tempfile
 import unittest
+from pathlib import Path
+from unittest import mock
 
 from phase_robust_backtesting.audit_multi_phase import (
     _config_key_from_line,
     _group_by_config,
     _parse_results,
+    run_audit,
 )
 
 # Representative stderr lines emitted by the experiment scripts'
@@ -186,6 +193,63 @@ class GroupByConfigTests(unittest.TestCase):
         )
         grouped = _group_by_config([rows_phase_0])
         self.assertEqual(len(grouped), 2)
+
+
+class TestRunAuditPhaseSweep(unittest.TestCase):
+    """``run_audit`` sweeps ``n_phases`` offsets, forwarding ``rebalance_stride``.
+
+    The two used to be one conflated parameter: ``rebalance_stride=63`` meant
+    "quarterly cadence" AND "63 phases" — which is why paradigms #12/#13 each
+    wrote a bespoke orchestrator just to pin the phase count. Decoupled, the
+    phase loop runs ``range(n_phases)`` while every subprocess still receives
+    ``--rebalance-stride <rebalance_stride>``.
+    """
+
+    def _run(self, tmp: Path, **kwargs) -> tuple[list[tuple[int, int]], dict]:
+        """Call run_audit with a stubbed subprocess; return (calls, envelope)."""
+        script = tmp / "experiment_fake.py"
+        script.write_text("# not executed; _run_one_phase is stubbed\n")
+        out = tmp / "audit.json"
+        calls: list[tuple[int, int]] = []
+
+        def fake_run_one_phase(script_arg, forwarded, phase_offset, stride):
+            calls.append((phase_offset, stride))
+            return _parse_results(_TRI_FACTOR_RESULT, phase_offset=phase_offset)
+
+        with (
+            mock.patch(
+                "phase_robust_backtesting.audit_multi_phase._run_one_phase",
+                side_effect=fake_run_one_phase,
+            ),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            rc = run_audit(script, [], out=out, **kwargs)
+        self.assertEqual(rc, 0)
+        return calls, json.loads(out.read_text())
+
+    def test_n_phases_and_stride_are_independent(self):
+        with tempfile.TemporaryDirectory() as td:
+            calls, envelope = self._run(Path(td), n_phases=2, rebalance_stride=21)
+        # Exactly n_phases subprocess runs, offsets 0..n_phases-1, each at the
+        # requested stride — NOT 21 runs.
+        self.assertEqual(calls, [(0, 21), (1, 21)])
+        self.assertEqual(envelope["n_phases"], 2)
+        self.assertEqual(envelope["rebalance_stride"], 21)
+
+    def test_default_sweep_is_five_phases(self):
+        with tempfile.TemporaryDirectory() as td:
+            calls, envelope = self._run(Path(td), rebalance_stride=5)
+        self.assertEqual([c[0] for c in calls], [0, 1, 2, 3, 4])
+        self.assertEqual(envelope["n_phases"], 5)
+
+    def test_more_phases_than_stride_is_rejected(self):
+        # A phase offset >= stride aliases offset % stride: the sweep would
+        # re-run identical calendars and report fake robustness.
+        with tempfile.TemporaryDirectory() as td:
+            script = Path(td) / "experiment_fake.py"
+            script.write_text("# not executed\n")
+            with self.assertRaises(ValueError):
+                run_audit(script, [], n_phases=6, rebalance_stride=5)
 
 
 if __name__ == "__main__":

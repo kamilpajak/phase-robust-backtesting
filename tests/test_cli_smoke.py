@@ -29,6 +29,7 @@ class CLISmokeTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, msg=result.stderr)
         self.assertIn("--script", result.stdout)
         self.assertIn("--rebalance-stride", result.stdout)
+        self.assertIn("--n-phases", result.stdout)
 
 
 if __name__ == "__main__":
