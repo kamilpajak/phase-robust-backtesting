@@ -128,9 +128,13 @@ def _run_one_phase(
     script: Path,
     forwarded_args: list[str],
     phase_offset: int,
-    stride: int,
+    rebalance_stride: int,
 ) -> list[dict[str, float]]:
     """Invoke the experiment script with --phase-offset and parse result rows.
+
+    ``rebalance_stride`` is the cadence forwarded to the subprocess as
+    ``--rebalance-stride`` — it does NOT drive the phase enumeration
+    (that is ``run_audit``'s ``n_phases``).
 
     Passes a per-phase --out under /tmp so subprocess invocations cannot
     clobber the canonical research docs (the experiment scripts' default
@@ -144,7 +148,7 @@ def _run_one_phase(
         sys.executable,
         str(script),
         "--rebalance-stride",
-        str(stride),
+        str(rebalance_stride),
         "--phase-offset",
         str(phase_offset),
         "--out",
@@ -242,6 +246,9 @@ def run_audit(
 
     by_config = _group_by_config(all_rows)
 
+    # Top-level ``n_phases`` = the requested sweep size. The per-config
+    # ``n_phases`` below = phases with parsed rows for that config (a
+    # pre-0.3.0 key downstream consumers already read — left unchanged).
     output: dict = {
         "script": str(script),
         "n_phases": n_phases,
@@ -326,6 +333,8 @@ def main() -> int:
         type=Path,
         default=Path("multi_phase_audit.json"),
     )
+    # Consume only the driver's own flags; everything else forwards verbatim
+    # to the experiment subprocess.
     args, forwarded = ap.parse_known_args()
     return run_audit(
         args.script,
