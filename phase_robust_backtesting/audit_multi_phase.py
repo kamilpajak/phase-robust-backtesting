@@ -2,7 +2,8 @@
 
 Wraps any backtest experiment script that accepts a ``--phase-offset N``
 flag and emits one or more headline log lines matching ``_RESULT_LINE``
-below. Loops over ``phase_offset = 0..stride-1``, parses per-phase
+below. Loops over ``phase_offset = 0..n_phases-1`` (independent of the
+``--rebalance-stride`` cadence forwarded to the script), parses per-phase
 metrics out of the child stderr, and writes an aggregated mean ± std ±
 robust verdict report (JSON).
 
@@ -10,7 +11,8 @@ Usage::
 
   python -m phase_robust_backtesting.audit_multi_phase \\
       --script path/to/experiment.py \\
-      --rebalance-stride 5 \\
+      --n-phases 5 \\
+      --rebalance-stride 21 \\
       [extra args forwarded to the experiment script]
 
 The experiment script is invoked once per phase as a subprocess. Any
@@ -126,9 +128,13 @@ def _run_one_phase(
     script: Path,
     forwarded_args: list[str],
     phase_offset: int,
-    stride: int,
+    rebalance_stride: int,
 ) -> list[dict[str, float]]:
     """Invoke the experiment script with --phase-offset and parse result rows.
+
+    ``rebalance_stride`` is the cadence forwarded to the subprocess as
+    ``--rebalance-stride`` — it does NOT drive the phase enumeration
+    (that is ``run_audit``'s ``n_phases``).
 
     Passes a per-phase --out under /tmp so subprocess invocations cannot
     clobber the canonical research docs (the experiment scripts' default
@@ -142,7 +148,7 @@ def _run_one_phase(
         sys.executable,
         str(script),
         "--rebalance-stride",
-        str(stride),
+        str(rebalance_stride),
         "--phase-offset",
         str(phase_offset),
         "--out",
@@ -168,6 +174,7 @@ def run_audit(
     script: Path,
     forwarded_args: list[str],
     *,
+    n_phases: int = 5,
     rebalance_stride: int = 5,
     out: Path | None = None,
 ) -> int:
@@ -186,9 +193,18 @@ def run_audit(
     forwarded_args : list[str]
         Arguments to pass through to the experiment script verbatim
         (e.g. ``--is-start 2019-01-08 --cost-half-spreads 5``).
+    n_phases : int
+        Number of phase offsets to sweep (0..n_phases-1). Drives the
+        statistical robustness of the audit, independent of cadence.
+        Must not exceed ``rebalance_stride`` — an offset >= the stride
+        aliases ``offset % stride`` and would re-run an identical
+        calendar as fake extra evidence.
     rebalance_stride : int
-        Number of phases to sweep (default 5 = weekly cadence with
-        daily phase offset).
+        Trading-day cadence forwarded to the experiment script as
+        ``--rebalance-stride`` (5 = weekly, 21 = ~monthly, 63 =
+        quarterly). Until v0.3.0 this single parameter also drove the
+        phase loop, which is why quarterly audits used to need bespoke
+        orchestrators just to avoid a 63-phase sweep.
     out : Path | None
         Output path for the aggregated JSON report. Defaults to
         ``multi_phase_audit.json`` in the current working directory.
@@ -199,6 +215,14 @@ def run_audit(
         Exit code: 0 on success. Raises :class:`RuntimeError` on
         per-phase failure (preserving the offending stderr tail).
     """
+    if n_phases < 1:
+        raise ValueError(f"n_phases must be >= 1, got {n_phases}")
+    if n_phases > rebalance_stride:
+        raise ValueError(
+            f"n_phases ({n_phases}) exceeds rebalance_stride ({rebalance_stride}): "
+            "a phase offset >= the stride aliases offset % stride, so the sweep "
+            "would re-run identical calendars and overstate robustness"
+        )
     if not script.exists():
         raise SystemExit(f"script path does not exist: {script}")
     script = script.resolve()
@@ -208,11 +232,11 @@ def run_audit(
     print(f"\n>>> Multi-phase audit: {script.name}", flush=True)
     print(f"    script: {script}", flush=True)
     print(f"    stride: {rebalance_stride}", flush=True)
-    print(f"    phases: 0..{rebalance_stride - 1}", flush=True)
+    print(f"    phases: 0..{n_phases - 1}", flush=True)
 
     all_rows: list[list[dict]] = []
-    for phase in range(rebalance_stride):
-        print(f"\n>>> phase {phase}/{rebalance_stride - 1}", flush=True)
+    for phase in range(n_phases):
+        print(f"\n>>> phase {phase}/{n_phases - 1}", flush=True)
         rows = _run_one_phase(script, forwarded_args, phase, rebalance_stride)
         if not rows:
             print(f"    WARNING: no result rows parsed for phase {phase}", flush=True)
@@ -222,8 +246,12 @@ def run_audit(
 
     by_config = _group_by_config(all_rows)
 
+    # Top-level ``n_phases`` = the requested sweep size. The per-config
+    # ``n_phases`` below = phases with parsed rows for that config (a
+    # pre-0.3.0 key downstream consumers already read — left unchanged).
     output: dict = {
         "script": str(script),
+        "n_phases": n_phases,
         "rebalance_stride": rebalance_stride,
         "configs": [],
     }
@@ -289,20 +317,29 @@ def main() -> int:
         help="Path to the experiment script that accepts --phase-offset.",
     )
     ap.add_argument(
+        "--n-phases",
+        type=int,
+        default=5,
+        help="Number of phase offsets to sweep (default 5; must be <= stride).",
+    )
+    ap.add_argument(
         "--rebalance-stride",
         type=int,
         default=5,
-        help="Stride to sweep across (default 5 = weekly cadence).",
+        help="Rebalance cadence in trading days, forwarded to the script (default 5 = weekly).",
     )
     ap.add_argument(
         "--out",
         type=Path,
         default=Path("multi_phase_audit.json"),
     )
+    # Consume only the driver's own flags; everything else forwards verbatim
+    # to the experiment subprocess.
     args, forwarded = ap.parse_known_args()
     return run_audit(
         args.script,
         forwarded,
+        n_phases=args.n_phases,
         rebalance_stride=args.rebalance_stride,
         out=args.out,
     )
